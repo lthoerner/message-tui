@@ -2,18 +2,14 @@ mod args;
 
 use std::io::{Read, Write};
 use std::net::{Ipv6Addr, TcpListener, TcpStream};
-use std::sync::{
-    atomic::{AtomicBool, AtomicUsize, Ordering},
-    mpsc::{self, Receiver, Sender},
-    Arc,
-};
+use std::sync::mpsc::{self, Receiver, Sender};
 use std::thread;
 use std::time::Duration;
 
 use clap::Parser;
+use crossterm::cursor;
 use crossterm::{
-    cursor,
-    event::{self, DisableMouseCapture, EnableMouseCapture, Event, KeyCode},
+    event::DisableMouseCapture,
     execute,
     terminal::{disable_raw_mode, enable_raw_mode, EnterAlternateScreen, LeaveAlternateScreen},
 };
@@ -23,7 +19,7 @@ use tui_textarea::{Input, Key, TextArea};
 
 use args::*;
 
-const POLL_RATE: Duration = Duration::from_millis(500);
+const POLL_RATE: Duration = Duration::from_millis(200);
 
 fn main() {
     let args = MessageTuiArgs::parse();
@@ -65,28 +61,17 @@ fn main() {
         }
     }
 
-    // Create a channel for sending messages to the UI thread
-    let (network_sender, ui_receiver): (Sender<Message>, Receiver<Message>) = mpsc::channel();
+    // Create a channel for sending messages to the UI thread and for sending keypresses to the UI thread
+    let (key_and_network_sender, ui_receiver): (Sender<Signal>, Receiver<Signal>) = mpsc::channel();
+    let network_sender = key_and_network_sender;
+    let key_sender = Some(network_sender.clone());
     // Create a channel for sending messages to the network thread
     let (ui_sender, network_receiver): (Sender<Message>, Receiver<Message>) = mpsc::channel();
-
-    // Whether the program should exit, indicating to the network thread to close the connection
-    let should_exit = Arc::new(AtomicBool::new(false));
-    let should_exit_network = should_exit.clone();
-
-    let times_polled = Arc::new(AtomicUsize::new(0));
-    let times_polled_network = times_polled.clone();
 
     // Spawn a thread to handle network communication
     thread::spawn(move || {
         tcp_connection.set_nonblocking(true).unwrap();
         loop {
-            if should_exit_network.load(Ordering::Relaxed) {
-                break;
-            }
-
-            times_polled_network.fetch_add(1, Ordering::Relaxed);
-
             // Send any messages received from the UI thread
             if let Ok(message) = network_receiver.try_recv() {
                 let message: String = serde_json::to_string(&message).unwrap();
@@ -99,7 +84,7 @@ fn main() {
                 if bytes_read != 0 {
                     // Send the message, if one was recieved, to be displayed by the UI
                     if let Ok(message) = serde_json::from_slice(&message_buffer[..bytes_read]) {
-                        network_sender.send(message).unwrap();
+                        network_sender.send(Signal::Message(message)).unwrap();
                     }
                 }
             };
@@ -110,15 +95,13 @@ fn main() {
     });
 
     // Hande the UI in the main thread
-    let mut app = MessageApp::open(username, ui_sender, ui_receiver);
+    let mut app = MessageApp::open(username, ui_sender, key_sender, ui_receiver);
     app.run_ui();
+}
 
-    // Close the network connection and UI once the user has pressed Escape
-    should_exit.store(true, Ordering::Relaxed);
-    app.close();
-
-    // Print the number of times the network was polled
-    println!("Polled {} times", times_polled.load(Ordering::Relaxed));
+enum Signal {
+    Message(Message),
+    KeyPress(Input),
 }
 
 #[derive(Debug, Serialize, Deserialize)]
@@ -129,25 +112,32 @@ struct Message {
 
 struct MessageApp<'a> {
     terminal: Terminal<CrosstermBackend<std::io::Stdout>>,
-    sender: Sender<Message>,
-    receiver: Receiver<Message>,
+    message_sender: Sender<Message>,
+    key_sender: Option<Sender<Signal>>,
+    receiver: Receiver<Signal>,
     username: String,
     messages: Vec<Message>,
     entry: TextArea<'a>,
 }
 
 impl<'a> MessageApp<'a> {
-    fn open(username: String, sender: Sender<Message>, receiver: Receiver<Message>) -> Self {
+    fn open(
+        username: String,
+        message_sender: Sender<Message>,
+        key_sender: Option<Sender<Signal>>,
+        receiver: Receiver<Signal>,
+    ) -> Self {
         let mut stdout = std::io::stdout();
         enable_raw_mode().unwrap();
-        execute!(stdout, EnterAlternateScreen, EnableMouseCapture).unwrap();
+        execute!(stdout, EnterAlternateScreen, DisableMouseCapture).unwrap();
 
         let backend = CrosstermBackend::new(stdout);
         let terminal = Terminal::new(backend).unwrap();
 
         Self {
             terminal,
-            sender,
+            message_sender,
+            key_sender,
             receiver,
             username,
             messages: Vec::new(),
@@ -160,66 +150,92 @@ impl<'a> MessageApp<'a> {
         execute!(
             self.terminal.backend_mut(),
             LeaveAlternateScreen,
-            DisableMouseCapture,
+            cursor::Show
         )
         .unwrap();
     }
 
     fn run_ui(&mut self) {
-        self.render();
+        let key_sender = self.key_sender.take().unwrap();
+        thread::spawn(move || loop {
+            // Catch user input and send it to the UI thread
+            let input = crossterm::event::read().unwrap().into();
+            key_sender.send(Signal::KeyPress(input)).unwrap();
+        });
+
         loop {
-            match crossterm::event::read().unwrap().into() {
-                Input { key: Key::Esc, .. } => break,
-                Input {
-                    key: Key::Enter, ..
-                } => {
-                    let content = self.entry.lines().to_owned().join("\n");
-                    // Add the message to the display and send it over the network
-                    self.messages.push(Message::new(&self.username, &content));
-                    self.sender.send(Message::new(&self.username, &content));
-
-                    // Clear the entry box
-                    self.entry = TextArea::default();
-                }
-                input => {
-                    self.entry.input(input);
-                }
-                // Don't update the UI for other events
-                // ? Is this necessary? I think this is already a blocking call
-                _ => continue,
-            }
-
-            if let Ok(message) = self.receiver.try_recv() {
-                self.messages.push(message);
-            }
-
+            // Frame update
             self.render();
+
+            // Handle input from the user and messages from the network
+            if let Ok(signal) = self.receiver.recv() {
+                match signal {
+                    Signal::Message(message) => {
+                        self.messages.push(message);
+                    }
+                    Signal::KeyPress(input) => {
+                        self.handle_input(input);
+                    }
+                }
+            }
+        }
+    }
+
+    fn handle_input(&mut self, input: Input) {
+        match input {
+            Input { key: Key::Esc, .. } => {
+                // Close the UI and exit the program
+                self.close();
+                std::process::exit(0);
+            }
+            Input {
+                key: Key::Enter, ..
+            } => {
+                // If the message is not empty, add it to the display and send it over the network
+                let content = self.entry.lines().to_owned().join("\n");
+                if content.is_empty() {
+                    return;
+                }
+
+                self.messages.push(Message::new(&self.username, &content));
+                self.message_sender
+                    .send(Message::new(&self.username, &content))
+                    .unwrap();
+
+                // Clear the entry box
+                self.entry = TextArea::default();
+            }
+            input => {
+                self.entry.input(input);
+            }
         }
     }
 
     fn render(&mut self) {
-        self.terminal.draw(|f| {
-            let chunks = Layout::default()
-                .direction(Direction::Vertical)
-                .constraints([Constraint::Percentage(80), Constraint::Percentage(20)].as_ref())
-                .split(f.size());
+        self.terminal
+            .draw(|f| {
+                let chunks = Layout::default()
+                    .direction(Direction::Vertical)
+                    .constraints([Constraint::Percentage(80), Constraint::Percentage(20)].as_ref())
+                    .split(f.size());
 
-            let messages = self
-                .messages
-                .iter()
-                .map(|message| ListItem::new(message.format()))
-                .collect::<Vec<_>>();
+                let messages = self
+                    .messages
+                    .iter()
+                    .map(|message| ListItem::new(message.format()))
+                    .collect::<Vec<_>>();
 
-            let messages = List::new(messages).block(Block::default().borders(Borders::ALL));
-            self.entry
-                .set_block(Block::default().borders(Borders::ALL).title(Span::styled(
-                    "Message",
-                    Style::default().fg(Color::LightGreen),
-                )));
+                let messages = List::new(messages).block(Block::default().borders(Borders::ALL));
+                self.entry
+                    .set_block(Block::default().borders(Borders::ALL).title(Span::styled(
+                        "Message",
+                        Style::default().fg(Color::LightGreen),
+                    )));
 
-            f.render_widget(messages, chunks[0]);
-            f.render_widget(self.entry.widget(), chunks[1]);
-        });
+                f.render_widget(messages, chunks[0]);
+                f.render_widget(self.entry.widget(), chunks[1]);
+            })
+            .unwrap();
     }
 }
 
