@@ -1,6 +1,6 @@
 mod args;
 
-use std::net::Ipv6Addr;
+use std::net::{Ipv6Addr, TcpListener, TcpStream};
 
 use clap::Parser;
 use crossterm::{
@@ -18,23 +18,65 @@ fn main() {
     match args.subcommand {
         MessageTuiSubcommand::Listen(ListenCommand { port }) => {
             println!("Listening on port {}...", port);
+
+            // Open a socket and listen for incoming connections
+            let listener = TcpListener::bind((Ipv6Addr::LOCALHOST, port)).unwrap();
+
+            // Wait for a connection to be established
+            let (stream, address) = listener.accept().unwrap();
+
+            println!("Connection established with {}", address);
         }
-        MessageTuiSubcommand::Connect(ConnectCommand { address, port }) => {
-            println!("Connecting to {} on port {}...", address, port);
+        MessageTuiSubcommand::Connect(ConnectCommand {
+            name,
+            address,
+            port,
+        }) => {
+            println!("Connecting to {} on port {} as {}...", address, port, name);
+
+            // Open a socket and connect to the specified address
+            let Ok(stream) = TcpStream::connect((address, port)) else {
+                println!("Failed to connect to {}", address);
+                return;
+            };
+
+            println!("Connection established with {}", address);
         }
     }
 
-    // let app = MessageApp::open();
-}
+    let mut app = MessageApp::open();
+    app.render();
 
-struct Sender {
-    address: Ipv6Addr,
-    name: String,
+    std::thread::sleep(std::time::Duration::from_secs(10));
+
+    app.close();
 }
 
 struct Message {
-    sender: Sender,
+    sender: String,
     content: String,
+}
+
+impl Message {
+    fn new(sender: &str, content: &str) -> Self {
+        let (sender, content) = (sender.to_owned(), content.to_owned());
+        Self { sender, content }
+    }
+
+    fn format(&self) -> Text<'_> {
+        let sender = Span::styled(
+            self.sender.as_str(),
+            Style::default()
+                .fg(Color::Yellow)
+                .add_modifier(Modifier::BOLD),
+        );
+
+        Text::from(Line::from(vec![
+            sender,
+            Span::styled(" > ", Style::default().fg(Color::LightGreen)),
+            Span::from(self.content.as_str()),
+        ]))
+    }
 }
 
 struct MessageApp {
@@ -51,10 +93,16 @@ impl MessageApp {
         let backend = CrosstermBackend::new(stdout);
         let terminal = Terminal::new(backend).unwrap();
 
-        Self {
-            messages: Vec::new(),
-            terminal,
-        }
+        let messages = vec![
+            Message::new("anonymous", "Hello, world!"),
+            Message::new("anonymous", "How is everyone doing?"),
+            Message::new("bill", "I'm doing well!"),
+            Message::new("bill", "How about you?"),
+            Message::new("anonymous", "I'm doing well too!"),
+            Message::new("anonymous", "Thanks for asking!"),
+        ];
+
+        Self { messages, terminal }
     }
 
     fn close(&mut self) {
@@ -65,5 +113,24 @@ impl MessageApp {
             DisableMouseCapture,
         )
         .unwrap();
+    }
+
+    fn render(&mut self) {
+        self.terminal.draw(|f| {
+            let chunks = Layout::default()
+                .direction(Direction::Vertical)
+                .constraints([Constraint::Percentage(90), Constraint::Percentage(10)].as_ref())
+                .split(f.size());
+
+            let messages = self
+                .messages
+                .iter()
+                .map(|message| ListItem::new(message.format()))
+                .collect::<Vec<_>>();
+
+            let messages = List::new(messages).block(Block::default().borders(Borders::ALL));
+
+            f.render_widget(messages, chunks[0]);
+        });
     }
 }
