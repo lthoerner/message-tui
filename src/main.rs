@@ -1,5 +1,8 @@
+mod args;
+
 use std::net::Ipv6Addr;
 
+use clap::Parser;
 use crossterm::{
     cursor,
     event::{self, DisableMouseCapture, EnableMouseCapture, Event, KeyCode},
@@ -8,8 +11,20 @@ use crossterm::{
 };
 use ratatui::{prelude::*, widgets::*};
 
+use args::*;
+
 fn main() {
-    let app = MessageApp::open();
+    let args = MessageTuiArgs::parse();
+    match args.subcommand {
+        MessageTuiSubcommand::Listen(ListenCommand { port }) => {
+            println!("Listening on port {}...", port);
+        }
+        MessageTuiSubcommand::Connect(ConnectCommand { address, port }) => {
+            println!("Connecting to {} on port {}...", address, port);
+        }
+    }
+
+    // let app = MessageApp::open();
 }
 
 struct Sender {
