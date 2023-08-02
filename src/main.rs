@@ -75,7 +75,15 @@ fn main() {
             // Send any messages received from the UI thread
             if let Ok(message) = network_receiver.try_recv() {
                 let message: String = serde_json::to_string(&message).unwrap();
-                tcp_connection.write_all(message.as_bytes()).unwrap();
+                match tcp_connection.write_all(message.as_bytes()) {
+                    Ok(_) => {}
+                    Err(_) => {
+                        // If the other user has closed the app,
+                        // send a signal to the UI thread to exit
+                        network_sender.send(Signal::LostConnection).unwrap();
+                        return;
+                    }
+                }
             }
 
             // Read messages from the network
@@ -102,6 +110,7 @@ fn main() {
 enum Signal {
     Message(Message),
     KeyPress(Input),
+    LostConnection,
 }
 
 #[derive(Debug, Serialize, Deserialize)]
@@ -175,6 +184,11 @@ impl<'a> MessageApp<'a> {
                     }
                     Signal::KeyPress(input) => {
                         self.handle_input(input);
+                    }
+                    Signal::LostConnection => {
+                        self.close();
+                        println!("Lost connection to other user");
+                        std::process::exit(0);
                     }
                 }
             }
