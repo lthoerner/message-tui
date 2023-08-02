@@ -19,6 +19,9 @@ pub enum MessageTuiSubcommand {
 #[derive(Debug, Args, Clone)]
 #[clap(about = "Listen for an incoming connection from another user")]
 pub struct ListenCommand {
+    #[arg(default_value = "anonymous")]
+    /// The name you want to be identified by
+    pub name: String,
     #[arg(default_value = "12500")]
     /// The port to listen on
     pub port: u16,

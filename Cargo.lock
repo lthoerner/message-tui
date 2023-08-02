@@ -248,6 +248,7 @@ dependencies = [
  "crossterm",
  "ratatui",
  "serde",
+ "tui-textarea",
 ]
 
 [[package]]
@@ -429,6 +430,15 @@ dependencies = [
  "proc-macro2",
  "quote",
  "unicode-ident",
+]
+
+[[package]]
+name = "tui-textarea"
+version = "0.2.0"
+source = "git+https://github.com/lthoerner/tui-textarea#74a072b8b67e02ff0a89b7526c5cdc0d5c848ca8"
+dependencies = [
+ "crossterm",
+ "ratatui",
 ]
 
 [[package]]

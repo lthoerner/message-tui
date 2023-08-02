@@ -11,14 +11,18 @@ use crossterm::{
 };
 use ratatui::{prelude::*, widgets::*};
 use serde::{Deserialize, Serialize};
+use tui_textarea::{Input, Key, TextArea};
 
 use args::*;
 
 fn main() {
     let args = MessageTuiArgs::parse();
+    let mut username = "anonymous".to_owned();
     match args.subcommand {
-        MessageTuiSubcommand::Listen(ListenCommand { port }) => {
-            println!("Listening on port {}...", port);
+        MessageTuiSubcommand::Listen(ListenCommand { name, port }) => {
+            println!("Listening on port {} as {}...", port, name);
+
+            username = name;
 
             // Open a socket and listen for incoming connections
             let listener = TcpListener::bind((Ipv6Addr::LOCALHOST, port)).unwrap();
@@ -35,6 +39,8 @@ fn main() {
         }) => {
             println!("Connecting to {} on port {} as {}...", address, port, name);
 
+            username = name;
+
             // Open a socket and connect to the specified address
             let Ok(stream) = TcpStream::connect((address, port)) else {
                 println!("Failed to connect to {}", address);
@@ -45,10 +51,8 @@ fn main() {
         }
     }
 
-    let mut app = MessageApp::open();
-    app.render();
-
-    std::thread::sleep(std::time::Duration::from_secs(10));
+    let mut app = MessageApp::open(username);
+    app.start_ui();
 
     app.close();
 }
@@ -81,14 +85,15 @@ impl Message {
     }
 }
 
-struct MessageApp {
+struct MessageApp<'a> {
     terminal: Terminal<CrosstermBackend<std::io::Stdout>>,
+    username: String,
     messages: Vec<Message>,
-    entry: String,
+    entry: TextArea<'a>,
 }
 
-impl MessageApp {
-    fn open() -> Self {
+impl<'a> MessageApp<'a> {
+    fn open(username: String) -> Self {
         let mut stdout = std::io::stdout();
         enable_raw_mode().unwrap();
         execute!(stdout, EnterAlternateScreen, EnableMouseCapture).unwrap();
@@ -96,19 +101,11 @@ impl MessageApp {
         let backend = CrosstermBackend::new(stdout);
         let terminal = Terminal::new(backend).unwrap();
 
-        let messages = vec![
-            Message::new("anonymous", "Hello, world!"),
-            Message::new("anonymous", "How is everyone doing?"),
-            Message::new("bill", "I'm doing well!"),
-            Message::new("bill", "How about you?"),
-            Message::new("anonymous", "I'm doing well too!"),
-            Message::new("anonymous", "Thanks for asking!"),
-        ];
-
         Self {
             terminal,
-            messages,
-            entry: String::new(),
+            username,
+            messages: Vec::new(),
+            entry: TextArea::default(),
         }
     }
 
@@ -122,11 +119,30 @@ impl MessageApp {
         .unwrap();
     }
 
+    fn start_ui(&mut self) {
+        loop {
+            self.render();
+            match crossterm::event::read().unwrap().into() {
+                Input { key: Key::Esc, .. } => break,
+                Input {
+                    key: Key::Enter, ..
+                } => {
+                    let content = self.entry.lines().to_owned().join("\n");
+                    self.messages.push(Message::new(&self.username, &content));
+                    self.entry = TextArea::default();
+                }
+                input => {
+                    self.entry.input(input);
+                }
+            }
+        }
+    }
+
     fn render(&mut self) {
         self.terminal.draw(|f| {
             let chunks = Layout::default()
                 .direction(Direction::Vertical)
-                .constraints([Constraint::Percentage(90), Constraint::Percentage(10)].as_ref())
+                .constraints([Constraint::Percentage(80), Constraint::Percentage(20)].as_ref())
                 .split(f.size());
 
             let messages = self
@@ -136,14 +152,14 @@ impl MessageApp {
                 .collect::<Vec<_>>();
 
             let messages = List::new(messages).block(Block::default().borders(Borders::ALL));
-            let input_box = Paragraph::new(Line::from(vec![
-                Span::styled("Enter message: ", Style::default().fg(Color::LightGreen)),
-                Span::raw(self.entry.as_str()),
-            ]))
-            .block(Block::default().borders(Borders::ALL ^ Borders::TOP));
+            self.entry
+                .set_block(Block::default().borders(Borders::ALL).title(Span::styled(
+                    "Message",
+                    Style::default().fg(Color::LightGreen),
+                )));
 
             f.render_widget(messages, chunks[0]);
-            f.render_widget(input_box, chunks[1]);
+            f.render_widget(self.entry.widget(), chunks[1]);
         });
     }
 }
