@@ -9,7 +9,7 @@ use std::time::Duration;
 use clap::Parser;
 use crossterm::cursor;
 use crossterm::{
-    event::DisableMouseCapture,
+    event::{DisableMouseCapture, Event, KeyCode, KeyEvent, KeyModifiers},
     execute,
     terminal::{disable_raw_mode, enable_raw_mode, EnterAlternateScreen, LeaveAlternateScreen},
 };
@@ -109,7 +109,7 @@ fn main() {
 
 enum Signal {
     Message(Message),
-    KeyPress(Input),
+    KeyPress(Event),
     LostConnection,
 }
 
@@ -127,6 +127,7 @@ struct MessageApp<'a> {
     username: String,
     messages: Vec<Message>,
     entry: TextArea<'a>,
+    scroll: (u16, u16),
 }
 
 impl<'a> MessageApp<'a> {
@@ -151,6 +152,7 @@ impl<'a> MessageApp<'a> {
             username,
             messages: Vec::new(),
             entry: TextArea::default(),
+            scroll: (0, 0),
         }
     }
 
@@ -168,7 +170,7 @@ impl<'a> MessageApp<'a> {
         let key_sender = self.key_sender.take().unwrap();
         thread::spawn(move || loop {
             // Catch user input and send it to the UI thread
-            let input = crossterm::event::read().unwrap().into();
+            let input = crossterm::event::read().unwrap();
             key_sender.send(Signal::KeyPress(input)).unwrap();
         });
 
@@ -195,8 +197,36 @@ impl<'a> MessageApp<'a> {
         }
     }
 
-    fn handle_input(&mut self, input: Input) {
-        match input {
+    fn handle_input(&mut self, input: Event) {
+        // Handle SHIFT+ARROW keys for scrolling
+        if let Event::Key(KeyEvent {
+            code, modifiers, ..
+        }) = input
+        {
+            if modifiers == KeyModifiers::SHIFT {
+                match code {
+                    KeyCode::Up => {
+                        self.scroll.0 = self.scroll.0.saturating_sub(1);
+                        return;
+                    }
+                    KeyCode::Down => {
+                        self.scroll.0 = self.scroll.0.saturating_add(1);
+                        return;
+                    }
+                    KeyCode::Left => {
+                        self.scroll.1 = self.scroll.1.saturating_sub(1);
+                        return;
+                    }
+                    KeyCode::Right => {
+                        self.scroll.1 = self.scroll.1.saturating_add(1);
+                        return;
+                    }
+                    _ => {}
+                }
+            }
+        }
+
+        match input.into() {
             Input { key: Key::Esc, .. } => {
                 // Close the UI and exit the program
                 self.close();
@@ -236,10 +266,12 @@ impl<'a> MessageApp<'a> {
                 let messages = self
                     .messages
                     .iter()
-                    .map(|message| ListItem::new(message.format()))
+                    .map(|message| message.format())
                     .collect::<Vec<_>>();
 
-                let messages = List::new(messages).block(Block::default().borders(Borders::ALL));
+                let messages = Paragraph::new(messages)
+                    .block(Block::default().borders(Borders::ALL))
+                    .scroll(self.scroll);
                 self.entry
                     .set_block(Block::default().borders(Borders::ALL).title(Span::styled(
                         "Message",
@@ -259,7 +291,7 @@ impl Message {
         Self { sender, content }
     }
 
-    fn format(&self) -> Text<'_> {
+    fn format(&self) -> Line<'_> {
         let sender = Span::styled(
             self.sender.as_str(),
             Style::default()
@@ -267,10 +299,10 @@ impl Message {
                 .add_modifier(Modifier::BOLD),
         );
 
-        Text::from(Line::from(vec![
+        Line::from(vec![
             sender,
             Span::styled(" > ", Style::default().fg(Color::LightGreen)),
             Span::from(self.content.as_str()),
-        ]))
+        ])
     }
 }
