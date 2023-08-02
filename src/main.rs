@@ -1,7 +1,7 @@
 mod args;
 
 use std::io::{Read, Write};
-use std::net::{Ipv6Addr, TcpListener, TcpStream};
+use std::net::{TcpListener, TcpStream};
 use std::sync::mpsc::{self, Receiver, Sender};
 use std::thread;
 use std::time::Duration;
@@ -27,13 +27,20 @@ fn main() {
     let mut tcp_connection;
     let username;
     match args.subcommand {
-        MessageTuiSubcommand::Listen(ListenCommand { name, port }) => {
-            println!("Listening on port {} as {}...", port, name);
+        MessageTuiSubcommand::Listen(ListenCommand {
+            name,
+            port,
+            address,
+        }) => {
+            println!(
+                "Listening on address {} port {} as {}...",
+                address, port, name
+            );
 
             username = name;
 
             // Open a socket and listen for incoming connections
-            let listener = TcpListener::bind((Ipv6Addr::LOCALHOST, port)).unwrap();
+            let listener = TcpListener::bind((address, port)).unwrap();
 
             // Wait for a connection to be established
             let (stream, address) = listener.accept().unwrap();

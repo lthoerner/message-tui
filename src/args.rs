@@ -22,6 +22,9 @@ pub struct ListenCommand {
     #[arg(default_value = "anonymous")]
     /// The name you want to be identified by
     pub name: String,
+    #[arg(default_value_t = Ipv6Addr::LOCALHOST)]
+    /// The address to listen for connections on
+    pub address: Ipv6Addr,
     #[arg(default_value = "12500")]
     /// The port to listen on
     pub port: u16,
