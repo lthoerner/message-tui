@@ -10,6 +10,7 @@ use crossterm::{
     terminal::{disable_raw_mode, enable_raw_mode, EnterAlternateScreen, LeaveAlternateScreen},
 };
 use ratatui::{prelude::*, widgets::*};
+use serde::{Deserialize, Serialize};
 
 use args::*;
 
@@ -52,6 +53,7 @@ fn main() {
     app.close();
 }
 
+#[derive(Serialize, Deserialize)]
 struct Message {
     sender: String,
     content: String,
@@ -80,8 +82,9 @@ impl Message {
 }
 
 struct MessageApp {
-    messages: Vec<Message>,
     terminal: Terminal<CrosstermBackend<std::io::Stdout>>,
+    messages: Vec<Message>,
+    entry: String,
 }
 
 impl MessageApp {
@@ -102,7 +105,11 @@ impl MessageApp {
             Message::new("anonymous", "Thanks for asking!"),
         ];
 
-        Self { messages, terminal }
+        Self {
+            terminal,
+            messages,
+            entry: String::new(),
+        }
     }
 
     fn close(&mut self) {
@@ -129,8 +136,14 @@ impl MessageApp {
                 .collect::<Vec<_>>();
 
             let messages = List::new(messages).block(Block::default().borders(Borders::ALL));
+            let input_box = Paragraph::new(Line::from(vec![
+                Span::styled("Enter message: ", Style::default().fg(Color::LightGreen)),
+                Span::raw(self.entry.as_str()),
+            ]))
+            .block(Block::default().borders(Borders::ALL ^ Borders::TOP));
 
             f.render_widget(messages, chunks[0]);
+            f.render_widget(input_box, chunks[1]);
         });
     }
 }
