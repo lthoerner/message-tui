@@ -260,7 +260,7 @@ impl<'a> MessageApp<'a> {
             .draw(|f| {
                 let chunks = Layout::default()
                     .direction(Direction::Vertical)
-                    .constraints([Constraint::Percentage(80), Constraint::Percentage(20)].as_ref())
+                    .constraints([Constraint::Min(1), Constraint::Length(4)].as_ref())
                     .split(f.size());
 
                 let messages = self
