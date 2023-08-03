@@ -146,7 +146,8 @@ impl<'a> MessageApp<'a> {
     ) -> Self {
         let mut stdout = std::io::stdout();
         enable_raw_mode().unwrap();
-        execute!(stdout, EnterAlternateScreen, DisableMouseCapture).unwrap();
+        // This will cause an error on Windows if mouse capture is not initially enabled
+        let _ = execute!(stdout, EnterAlternateScreen, DisableMouseCapture);
 
         let backend = CrosstermBackend::new(stdout);
         let terminal = Terminal::new(backend).unwrap();
