@@ -19,18 +19,18 @@ use tui_textarea::{Input, Key, TextArea};
 
 use args::*;
 
-const POLL_RATE: Duration = Duration::from_millis(200);
-
 fn main() {
     let args = MessageTuiArgs::parse();
 
     let mut tcp_connection;
     let username;
+    let poll_rate;
     match args.subcommand {
         MessageTuiSubcommand::Listen(ListenCommand {
             name,
             port,
             address,
+            poll_rate: rate,
         }) => {
             println!(
                 "Listening on address {} port {} as {}...",
@@ -46,12 +46,15 @@ fn main() {
             let (stream, address) = listener.accept().unwrap();
             tcp_connection = stream;
 
+            poll_rate = rate;
+
             println!("Connection established with {}", address);
         }
         MessageTuiSubcommand::Connect(ConnectCommand {
             name,
             address,
             port,
+            poll_rate: rate,
         }) => {
             println!("Connecting to {} on port {} as {}...", address, port, name);
 
@@ -63,6 +66,8 @@ fn main() {
                 return;
             };
             tcp_connection = stream;
+
+            poll_rate = rate;
 
             println!("Connection established with {}", address);
         }
@@ -105,7 +110,7 @@ fn main() {
             };
 
             // Poll the network at a fixed rate to avoid needless CPU overhead
-            thread::sleep(POLL_RATE)
+            thread::sleep(Duration::from_millis(poll_rate as u64))
         }
     });
 
